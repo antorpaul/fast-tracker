@@ -5,11 +5,14 @@ const router = express.Router();
 
 router.get('/fasts', async (req, res) => {
   try {
+    console.log('[ROUTE] GET /fasts - fetching all fasts');
     const fasts = await db.all(
       'SELECT * FROM fasts ORDER BY start_time DESC'
     );
+    console.log(`[ROUTE] GET /fasts - returning ${fasts.length} fasts`);
     res.json(fasts);
   } catch (error) {
+    console.error('[ROUTE] GET /fasts - ERROR:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
