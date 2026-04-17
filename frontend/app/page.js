@@ -44,6 +44,7 @@ export default function HomePage() {
   const [activeFast, setActiveFast] = useState(null);
   const [setupMessage, setSetupMessage] = useState({ text: '', type: '' });
   const [statusMessage, setStatusMessage] = useState({ text: '', type: '' });
+  const [tick, setTick] = useState(0); // Live clock ticker
 
   const completedHistory = useMemo(
     () => history.filter((item) => item.ended_at !== null),
@@ -51,6 +52,17 @@ export default function HomePage() {
   );
 
   const allFasts = useMemo(() => history, [history]);
+
+  // Check if there's any active or upcoming fast (not ended)
+  const upcomingOrActiveFast = useMemo(
+    () => history.find((fast) => fast.ended_at === null) ?? null,
+    [history]
+  );
+
+  const isIncomingFast = useMemo(
+    () => activeFast && activeFast.start_time > Date.now(),
+    [activeFast, tick]
+  );
 
   const currentProgress = useMemo(() => {
     if (!activeFast) return { percent: 0, remaining: 0, total: 1 };
@@ -63,22 +75,37 @@ export default function HomePage() {
       remaining,
       total,
     };
-  }, [activeFast]);
+  }, [activeFast, tick]);
+
+  const incomingProgress = useMemo(() => {
+    if (!isIncomingFast) return { remaining: 0 };
+    const now = Date.now();
+    const remaining = Math.max(0, activeFast.start_time - now);
+    return { remaining };
+  }, [activeFast, isIncomingFast, tick]);
 
   useEffect(() => {
     fetchFasts();
   }, []);
 
+  // Live clock ticker - updates UI every second
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setTick((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     if (!activeFast) return;
     const interval = setInterval(() => {
-      const remaining = activeFast.end_time - Date.now();
-      if (remaining <= 0) {
+      // Check if current fast has ended
+      if (!isIncomingFast && activeFast.end_time - Date.now() <= 0) {
         endFast(false);
       }
     }, 1000);
     return () => clearInterval(interval);
-  }, [activeFast]);
+  }, [activeFast, isIncomingFast]);
 
   async function fetchFasts() {
     try {
@@ -107,6 +134,24 @@ export default function HomePage() {
 
   async function startFast() {
     clearMessages();
+    
+    // Check if there's already an active or upcoming fast
+    if (upcomingOrActiveFast) {
+      const isFastIncoming = upcomingOrActiveFast.start_time > Date.now();
+      if (isFastIncoming) {
+        setSetupMessage({
+          text: `Cannot start a new fast. You have an incoming fast scheduled for ${formatDate(upcomingOrActiveFast.start_time)}.`,
+          type: 'error',
+        });
+      } else {
+        setSetupMessage({
+          text: 'Cannot start a new fast. You already have an active fast in progress.',
+          type: 'error',
+        });
+      }
+      return;
+    }
+
     const hours = getRequestedHours();
     if (!hours) {
       setSetupMessage({ text: 'Enter a valid fasting duration greater than 0 hours.', type: 'error' });
@@ -127,7 +172,10 @@ export default function HomePage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Unable to start fast');
       setActiveFast(data);
-      setStatusMessage({ text: `Started a ${hours}-hour fast.`, type: 'success' });
+      const messageText = parsedStart > Date.now()
+        ? `Scheduled a ${hours}-hour fast to start at ${formatDate(parsedStart)}.`
+        : `Started a ${hours}-hour fast.`;
+      setStatusMessage({ text: messageText, type: 'success' });
       await fetchFasts();
     } catch (error) {
       setSetupMessage({ text: error.message, type: 'error' });
@@ -243,11 +291,17 @@ export default function HomePage() {
       </section>
 
       <section className="card">
-        <h2>Current fast</h2>
+        <h2>{isIncomingFast ? 'Incoming fast' : 'Current fast'}</h2>
         <div className="status-grid">
           <div className="metric">
-            <div className="label">Time remaining</div>
-            <div className="value" id="remaining">{activeFast ? formatRemaining(currentProgress.remaining) : '—'}</div>
+            <div className="label">{isIncomingFast ? 'Time till start' : 'Time remaining'}</div>
+            <div className="value" id="remaining">
+              {activeFast
+                ? isIncomingFast
+                  ? formatRemaining(incomingProgress.remaining)
+                  : formatRemaining(currentProgress.remaining)
+                : '—'}
+            </div>
           </div>
           <div className="metric">
             <div className="label">Started at</div>
@@ -259,11 +313,17 @@ export default function HomePage() {
           </div>
         </div>
         <div className="bar">
-          <div className="fill" style={{ width: `${currentProgress.percent}%` }} />
+          <div className="fill" style={{ width: `${isIncomingFast ? 0 : currentProgress.percent}%` }} />
         </div>
         <div className="bar-meta">
-          <span id="progressLabel">{activeFast ? `${activeFast.planned_hours}-hour fast in progress` : 'No active fast'}</span>
-          <span id="percent">{activeFast ? `${currentProgress.percent}%` : '0%'}</span>
+          <span id="progressLabel">
+            {activeFast
+              ? isIncomingFast
+                ? 'Incoming fast scheduled'
+                : `${activeFast.planned_hours}-hour fast in progress`
+              : 'No active fast'}
+          </span>
+          <span id="percent">{activeFast && !isIncomingFast ? `${currentProgress.percent}%` : '0%'}</span>
         </div>
         <div className="actions">
           <button className="danger" type="button" onClick={() => endFast(true)}>
