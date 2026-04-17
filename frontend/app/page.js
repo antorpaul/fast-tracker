@@ -45,6 +45,8 @@ export default function HomePage() {
   const [setupMessage, setSetupMessage] = useState({ text: '', type: '' });
   const [statusMessage, setStatusMessage] = useState({ text: '', type: '' });
   const [tick, setTick] = useState(0); // Live clock ticker
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [notificationPermission, setNotificationPermission] = useState('default');
 
   const completedHistory = useMemo(
     () => history.filter((item) => item.ended_at !== null),
@@ -106,6 +108,31 @@ export default function HomePage() {
     }, 1000);
     return () => clearInterval(interval);
   }, [activeFast, isIncomingFast]);
+
+  // Service Worker and Notifications setup
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js')
+        .then((registration) => {
+          console.log('Service Worker registered:', registration);
+        })
+        .catch((error) => {
+          console.log('Service Worker registration failed:', error);
+        });
+    }
+
+    // Check notification permission
+    if ('Notification' in window) {
+      setNotificationPermission(Notification.permission);
+    }
+  }, []);
+
+  // Schedule notifications when activeFast changes
+  useEffect(() => {
+    if (activeFast && notificationsEnabled && notificationPermission === 'granted') {
+      scheduleNotifications(activeFast);
+    }
+  }, [activeFast, notificationsEnabled, notificationPermission]);
 
   async function fetchFasts() {
     try {
@@ -218,6 +245,133 @@ export default function HomePage() {
     }
   }
 
+  // Notification functions
+  async function requestNotificationPermission() {
+    if (!('Notification' in window)) {
+      setStatusMessage({ text: 'Notifications are not supported in this browser.', type: 'error' });
+      return;
+    }
+
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+
+      if (permission === 'granted') {
+        setNotificationsEnabled(true);
+        setStatusMessage({ text: 'Notifications enabled! You\'ll be notified when your fast starts and ends.', type: 'success' });
+      } else {
+        setStatusMessage({ text: 'Notification permission denied. You can enable notifications in your browser settings.', type: 'error' });
+      }
+    } catch (error) {
+      setStatusMessage({ text: 'Error requesting notification permission.', type: 'error' });
+    }
+  }
+
+  function scheduleNotifications(fast) {
+    if (!('serviceWorker' in navigator)) return;
+
+    navigator.serviceWorker.ready.then((registration) => {
+      const now = Date.now();
+
+      // Schedule pre-fast notifications (only if fast starts in future)
+      if (fast.start_time > now) {
+        const oneHourBefore = fast.start_time - (60 * 60 * 1000); // 1 hour before
+        const thirtyMinutesBefore = fast.start_time - (30 * 60 * 1000); // 30 minutes before
+
+        // 1 hour before notification
+        if (oneHourBefore > now) {
+          registration.active.postMessage({
+            type: 'SCHEDULE_NOTIFICATION',
+            title: 'Upcoming Fast!',
+            body: 'Upcoming fast in 1 hour. Get your food in!',
+            timestamp: oneHourBefore,
+            tag: `fast-1hour-${fast.id}`
+          });
+        }
+
+        // 30 minutes before notification
+        if (thirtyMinutesBefore > now) {
+          registration.active.postMessage({
+            type: 'SCHEDULE_NOTIFICATION',
+            title: 'Upcoming Fast!',
+            body: 'Upcoming fast in 30 minutes. Get your food in!',
+            timestamp: thirtyMinutesBefore,
+            tag: `fast-30min-${fast.id}`
+          });
+        }
+
+        // Start notification
+        registration.active.postMessage({
+          type: 'SCHEDULE_NOTIFICATION',
+          title: 'Fast Starting!',
+          body: `Your ${fast.planned_hours}-hour fast is about to begin.`,
+          timestamp: fast.start_time,
+          tag: `fast-start-${fast.id}`
+        });
+      }
+
+      // Schedule progress notifications for ongoing fasts
+      const fastDuration = fast.end_time - fast.start_time;
+
+      // 25% notification
+      const twentyFivePercent = fast.start_time + (fastDuration * 0.25);
+      if (twentyFivePercent > now) {
+        registration.active.postMessage({
+          type: 'SCHEDULE_NOTIFICATION',
+          title: 'Fast Progress',
+          body: '25% into the fast. Don\'t give in!',
+          timestamp: twentyFivePercent,
+          tag: `fast-25percent-${fast.id}`
+        });
+      }
+
+      // 50% notification
+      const fiftyPercent = fast.start_time + (fastDuration * 0.5);
+      if (fiftyPercent > now) {
+        registration.active.postMessage({
+          type: 'SCHEDULE_NOTIFICATION',
+          title: 'Fast Progress',
+          body: '50% into the fast. Halfway there!!',
+          timestamp: fiftyPercent,
+          tag: `fast-50percent-${fast.id}`
+        });
+      }
+
+      // 75% notification
+      const seventyFivePercent = fast.start_time + (fastDuration * 0.75);
+      if (seventyFivePercent > now) {
+        registration.active.postMessage({
+          type: 'SCHEDULE_NOTIFICATION',
+          title: 'Fast Progress',
+          body: '75% into the fast. Don\'t fold now brother!',
+          timestamp: seventyFivePercent,
+          tag: `fast-75percent-${fast.id}`
+        });
+      }
+
+      // 100% completion notification (replaces the old end notification)
+      registration.active.postMessage({
+        type: 'SCHEDULE_NOTIFICATION',
+        title: 'Fast Complete!',
+        body: '100% done with fast! Go have some oats brother!',
+        timestamp: fast.end_time,
+        tag: `fast-complete-${fast.id}`
+      });
+    });
+  }
+
+  function toggleNotifications() {
+    if (notificationPermission !== 'granted') {
+      requestNotificationPermission();
+    } else {
+      setNotificationsEnabled(!notificationsEnabled);
+      setStatusMessage({
+        text: notificationsEnabled ? 'Notifications disabled.' : 'Notifications enabled!',
+        type: 'success'
+      });
+    }
+  }
+
   return (
     <main className="app">
       <section className="card">
@@ -269,9 +423,21 @@ export default function HomePage() {
               }}
             />
           </div>
-          <button className="primary" type="button" onClick={startFast}>
-            Start fast
-          </button>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'end' }}>
+            <button
+              className={`secondary ${notificationsEnabled ? 'selected' : ''}`}
+              type="button"
+              onClick={toggleNotifications}
+              style={{ fontSize: '12px', padding: '8px 12px' }}
+            >
+              🔔 {notificationPermission === 'granted'
+                ? (notificationsEnabled ? 'On' : 'Off')
+                : 'Enable'}
+            </button>
+            <button className="primary" type="button" onClick={startFast}>
+              Start fast
+            </button>
+          </div>
         </div>
         <div className="row" style={{ marginTop: '12px' }}>
           <div>
