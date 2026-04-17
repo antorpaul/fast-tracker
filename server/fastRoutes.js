@@ -1,16 +1,19 @@
 const express = require('express');
-const db = require('./db');
+const { supabase } = require('./db');
 
 const router = express.Router();
 
 router.get('/fasts', async (req, res) => {
   try {
     console.log('[ROUTE] GET /fasts - fetching all fasts');
-    const fasts = await db.all(
-      'SELECT * FROM fasts ORDER BY start_time DESC'
-    );
-    console.log(`[ROUTE] GET /fasts - returning ${fasts.length} fasts`);
-    res.json(fasts);
+    const { data, error } = await supabase
+      .from('fasts')
+      .select('*')
+      .order('start_time', { ascending: false });
+    
+    if (error) throw error;
+    console.log(`[ROUTE] GET /fasts - returning ${data.length} fasts`);
+    res.json(data);
   } catch (error) {
     console.error('[ROUTE] GET /fasts - ERROR:', error.message);
     res.status(500).json({ error: error.message });
@@ -19,9 +22,15 @@ router.get('/fasts', async (req, res) => {
 
 router.get('/fasts/:id', async (req, res) => {
   try {
-    const fast = await db.get('SELECT * FROM fasts WHERE id = ?', [req.params.id]);
-    if (!fast) return res.status(404).json({ error: 'Fast not found' });
-    res.json(fast);
+    const { data, error } = await supabase
+      .from('fasts')
+      .select('*')
+      .eq('id', req.params.id)
+      .single();
+    
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Fast not found' });
+    res.json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -33,13 +42,20 @@ router.post('/fasts', async (req, res) => {
     if (!plannedHours || !startTime || !endTime) {
       return res.status(400).json({ error: 'plannedHours, startTime, and endTime are required' });
     }
-    const now = Date.now();
-    const result = await db.run(
-      'INSERT INTO fasts (planned_hours, start_time, end_time, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-      [plannedHours, startTime, endTime, now, now]
-    );
-    const fast = await db.get('SELECT * FROM fasts WHERE id = ?', [result.id]);
-    res.status(201).json(fast);
+    
+    const { data, error } = await supabase
+      .from('fasts')
+      .insert([{
+        planned_hours: plannedHours,
+        start_time: startTime,
+        end_time: endTime,
+        ended_early: false
+      }])
+      .select()
+      .single();
+    
+    if (error) throw error;
+    res.status(201).json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -48,22 +64,24 @@ router.post('/fasts', async (req, res) => {
 router.put('/fasts/:id', async (req, res) => {
   try {
     const { plannedHours, startTime, endTime, endedAt, endedEarly } = req.body;
-    const fast = await db.get('SELECT * FROM fasts WHERE id = ?', [req.params.id]);
-    if (!fast) return res.status(404).json({ error: 'Fast not found' });
-    const updatedAt = Date.now();
-    const updatedFast = {
-      plannedHours: plannedHours ?? fast.planned_hours,
-      startTime: startTime ?? fast.start_time,
-      endTime: endTime ?? fast.end_time,
-      endedAt: endedAt ?? fast.ended_at,
-      endedEarly: endedEarly !== undefined ? (endedEarly ? 1 : 0) : fast.ended_early
-    };
-    await db.run(
-      'UPDATE fasts SET planned_hours = ?, start_time = ?, end_time = ?, ended_at = ?, ended_early = ?, updated_at = ? WHERE id = ?',
-      [updatedFast.plannedHours, updatedFast.startTime, updatedFast.endTime, updatedFast.endedAt, updatedFast.endedEarly, updatedAt, req.params.id]
-    );
-    const fresh = await db.get('SELECT * FROM fasts WHERE id = ?', [req.params.id]);
-    res.json(fresh);
+    
+    const updates = {};
+    if (plannedHours !== undefined) updates.planned_hours = plannedHours;
+    if (startTime !== undefined) updates.start_time = startTime;
+    if (endTime !== undefined) updates.end_time = endTime;
+    if (endedAt !== undefined) updates.ended_at = endedAt;
+    if (endedEarly !== undefined) updates.ended_early = endedEarly;
+    
+    const { data, error } = await supabase
+      .from('fasts')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Fast not found' });
+    res.json(data);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -71,8 +89,12 @@ router.put('/fasts/:id', async (req, res) => {
 
 router.delete('/fasts/:id', async (req, res) => {
   try {
-    const result = await db.run('DELETE FROM fasts WHERE id = ?', [req.params.id]);
-    if (!result.changes) return res.status(404).json({ error: 'Fast not found' });
+    const { error } = await supabase
+      .from('fasts')
+      .delete()
+      .eq('id', req.params.id);
+    
+    if (error) throw error;
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -81,11 +103,16 @@ router.delete('/fasts/:id', async (req, res) => {
 
 router.delete('/fasts', async (req, res) => {
   try {
-    const query = req.query.ended === 'true'
-      ? 'DELETE FROM fasts WHERE ended_at IS NOT NULL'
-      : 'DELETE FROM fasts';
-    const result = await db.run(query);
-    res.json({ success: true, deleted: result.changes });
+    let query = supabase.from('fasts').delete();
+    
+    if (req.query.ended === 'true') {
+      query = query.not('ended_at', 'is', null);
+    }
+    
+    const { error } = await query;
+    if (error) throw error;
+    
+    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

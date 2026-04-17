@@ -212,6 +212,11 @@ pnpm-debug.log*
 package-lock.json
 **/package-lock.json
 server/data/*.db
+
+# Agent Skills and Extensions
+.agents/
+.claude/
+.vscode/extensions/
 .cursorignore
 .cursorindexingignore
 
@@ -219,3 +224,4 @@ server/data/*.db
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+.vscode/mcp.json
